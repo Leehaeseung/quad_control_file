@@ -22,10 +22,31 @@ CAMERA_FPS = 30
 ISAAC_TO_DYNAMIXEL_MAPPING = [7, 8, 1, 2, 10, 11, 4, 5]
 DYNAMIXEL_IDS = [1, 2, 4, 5, 7, 8, 10, 11]  # 실제 연결된 모터들
 
-# 🔧 모터 방향 반전 설정 (NEW!)
-# 오른쪽 모터들의 회전방향을 반대로 하기 위한 설정
-# True: 해당 조인트 각도에 -1을 곱함 (방향 반전)
-# False: 원본 각도 그대로 사용
+# 🚗 바퀴 모터 설정 (NEW!)
+WHEEL_MOTOR_IDS = [3, 6, 9, 12]  # 바퀴 모터 ID들
+WHEEL_POSITIONS = {
+    3: 'lf',   # 왼쪽 앞
+    6: 'rf',   # 오른쪽 앞  
+    9: 'lb',   # 왼쪽 뒤
+    12: 'rb'   # 오른쪽 뒤
+}
+
+# 🚗 바퀴 방향 반전 설정 (수정됨)
+# 전진 시 모든 바퀴가 같은 방향으로 회전하도록 설정
+WHEEL_DIRECTION_INVERT = {
+    3: False,   # lf (왼쪽 앞) - 정방향
+    6: False,   # rf (오른쪽 앞) - 정방향 (반전 해제) ✅
+    9: False,   # lb (왼쪽 뒤) - 정방향  
+    12: False   # rb (오른쪽 뒤) - 정방향 (반전 해제) ✅
+}
+
+# 🚗 바퀴 속도 설정 (2배 증가)
+WHEEL_MAX_VELOCITY = 100    # RPM (최대 속도 - 50→100)
+WHEEL_DEFAULT_SPEED = 60    # RPM (기본 속도 - 30→60)
+WHEEL_SLOW_SPEED = 30       # RPM (저속 - 15→30)
+WHEEL_FAST_SPEED = 90       # RPM (고속 - 45→90)
+
+# 🔧 방향 반전 설정 (기존)
 JOINT_DIRECTION_INVERT = [
     False,  # 조인트 0 (lb_leg, 모터ID 7) - 왼쪽 뒷다리
     False,  # 조인트 1 (lb_knee, 모터ID 8) - 왼쪽 뒷무릎
@@ -39,7 +60,7 @@ JOINT_DIRECTION_INVERT = [
 
 # 모터 설정
 MOTOR_MIN_ANGLE = -50     # 도
-MOTOR_MAX_ANGLE = 50    # 도
+MOTOR_MAX_ANGLE = 70    # 도
 MOTOR_CENTER_POSITION = 2048
 
 # 시스템 주기 설정
@@ -77,7 +98,7 @@ JOINT_NAMES = [
 DEBUG_MODE = True
 VERBOSE_LOGGING = False
 
-# 🔧 방향 반전 유틸리티 함수들 (NEW!)
+# 🔧 방향 반전 유틸리티 함수들 (기존)
 def apply_direction_inversion(joint_angles_deg):
     """
     조인트 각도에 방향 반전 적용
@@ -100,7 +121,86 @@ def apply_direction_inversion(joint_angles_deg):
     
     return inverted_angles
 
-def get_motor_direction_info():
+# 🚗 바퀴 방향 반전 유틸리티 함수들 (NEW!)
+def apply_wheel_direction_inversion(wheel_id, velocity_rpm):
+    """
+    바퀴 속도에 방향 반전 적용
+    
+    Args:
+        wheel_id: 바퀴 모터 ID
+        velocity_rpm: 속도 (RPM)
+    
+    Returns:
+        float: 방향 반전이 적용된 속도
+    """
+    if wheel_id in WHEEL_DIRECTION_INVERT and WHEEL_DIRECTION_INVERT[wheel_id]:
+        return -velocity_rpm  # 오른쪽 바퀴 반전
+    return velocity_rpm
+
+def get_wheel_info():
+    """바퀴 설정 정보 반환 (디버깅용)"""
+    info = []
+    for wheel_id in WHEEL_MOTOR_IDS:
+        position = WHEEL_POSITIONS[wheel_id]
+        invert = WHEEL_DIRECTION_INVERT[wheel_id]
+        side = "오른쪽" if position.startswith('r') else "왼쪽"
+        pos_name = "앞" if position.endswith('f') else "뒤"
+        
+        info.append({
+            'wheel_id': wheel_id,
+            'position': position,
+            'side': side,
+            'position_name': pos_name,
+            'direction_inverted': invert
+        })
+    
+    return info
+
+# 🚗 옴니휠 홀로노믹 운동학 (원래대로 복원)
+def calculate_omni_wheel_velocities(vx, vy, omega):
+    """
+    홀로노믹 이동을 위한 바퀴 속도 계산
+    
+    Args:
+        vx: 전후 속도 (양수: 전진)
+        vy: 좌우 속도 (양수: 우측)  
+        omega: 회전 속도 (양수: 반시계)
+    
+    Returns:
+        dict: 각 바퀴의 속도 {wheel_id: rpm}
+    """
+    # 🔧 표준 옴니휠 운동학 (원래대로)
+    wheel_velocities = {
+        3: vx - vy - omega,  # lf (왼쪽 앞)
+        6: -vx - vy - omega,  # rf (오른쪽 앞)
+        9: vx + vy - omega,  # lb (왼쪽 뒤)
+        12: -vx + vy - omega  # rb (오른쪽 뒤)
+    }
+    
+    # 방향 반전 적용
+    for wheel_id in wheel_velocities:
+        wheel_velocities[wheel_id] = apply_wheel_direction_inversion(
+            wheel_id, wheel_velocities[wheel_id]
+        )
+    
+    return wheel_velocities
+
+def test_individual_wheel_directions():
+    """개별 바퀴 방향 테스트용 함수"""
+    print("\n🔧 개별 바퀴 방향 테스트:")
+    
+    # 각 바퀴를 개별적으로 테스트
+    test_cases = [
+        ("왼쪽 앞 (lf, ID3) 단독", {3: 30, 6: 0, 9: 0, 12: 0}),
+        ("오른쪽 앞 (rf, ID6) 단독", {3: 0, 6: 30, 9: 0, 12: 0}),
+        ("왼쪽 뒤 (lb, ID9) 단독", {3: 0, 6: 0, 9: 30, 12: 0}),
+        ("오른쪽 뒤 (rb, ID12) 단독", {3: 0, 6: 0, 9: 0, 12: 30}),
+    ]
+    
+    for description, velocities in test_cases:
+        print(f"  {description}: {velocities}")
+    
+    return test_cases
     """모터 방향 설정 정보 반환 (디버깅용)"""
     info = []
     for i in range(8):
@@ -133,15 +233,33 @@ def validate_motor_config():
     
     print("✅ 모터 설정 유효성 검사 통과")
 
+def validate_wheel_config():
+    """바퀴 설정 유효성 검사"""
+    assert len(WHEEL_MOTOR_IDS) == 4, "바퀴 모터 ID 배열 크기 오류"
+    assert len(WHEEL_POSITIONS) == 4, "바퀴 위치 배열 크기 오류"
+    assert len(WHEEL_DIRECTION_INVERT) == 4, "바퀴 방향 반전 배열 크기 오류"
+    
+    # 이제 모든 바퀴가 정방향으로 설정되어야 함
+    for wheel_id in WHEEL_MOTOR_IDS:
+        assert WHEEL_DIRECTION_INVERT[wheel_id] == False, f"바퀴 {wheel_id}가 정방향으로 설정되지 않음"
+    
+    print("✅ 바퀴 설정 유효성 검사 통과")
+
 # 모듈 임포트 시 자동 검사
 if __name__ == "__main__":
-    print("🔧 모터 설정 테스트...")
+    print("🔧 시스템 설정 테스트...")
     validate_motor_config()
+    validate_wheel_config()
     
     print("\n📊 모터 방향 설정 정보:")
     for info in get_motor_direction_info():
         invert_str = "반전" if info['direction_inverted'] else "정방향"
         print(f"  조인트{info['joint_index']} ({info['joint_name']}) → 모터ID{info['motor_id']} - {info['side']} - {invert_str}")
+    
+    print("\n🚗 바퀴 설정 정보:")
+    for info in get_wheel_info():
+        invert_str = "반전" if info['direction_inverted'] else "정방향"
+        print(f"  {info['position']} ({info['side']} {info['position_name']}) → 모터ID{info['wheel_id']} - {invert_str}")
     
     print("\n🧪 방향 반전 테스트:")
     test_angles = [10, 15, -5, 20, 12, -8, 25, -10]
@@ -149,4 +267,17 @@ if __name__ == "__main__":
     inverted = apply_direction_inversion(test_angles)
     print(f"반전 적용: {inverted}")
     
-    print("\n✅ 모터 설정 테스트 완료!")
+    print("\n🚗 바퀴 속도 테스트 (간단 수정):")
+    test_forward = calculate_omni_wheel_velocities(60, 0, 0)  # 전진
+    print(f"전진 w키 (vx=60): {test_forward}")
+    
+    test_backward = calculate_omni_wheel_velocities(-60, 0, 0)  # 후진  
+    print(f"후진 백스페이스 (vx=-60): {test_backward}")
+    
+    test_left = calculate_omni_wheel_velocities(0, -30, 0)  # 좌측
+    print(f"좌측 a키 (vy=-30): {test_left}")
+    
+    test_right = calculate_omni_wheel_velocities(0, 30, 0)  # 우측
+    print(f"우측 d키 (vy=30): {test_right}")
+    
+    print("\n✅ 시스템 설정 테스트 완료!")
